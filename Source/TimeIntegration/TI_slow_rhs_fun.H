@@ -17,8 +17,23 @@
 
         Real slow_dt = new_stage_time - old_step_time;
 
+        // *************************************************************************
+        // Set up flux registers if using two_way coupling
+        // *************************************************************************
+        YAFluxRegister* fr_as_crse = nullptr;
+        YAFluxRegister* fr_as_fine = nullptr;
+        if (solverChoice.coupling_type == CouplingType::TwoWay) {
+            if (level < finest_level) {
+                fr_as_crse = getAdvFluxReg(level+1);
+                fr_as_crse->reset();
+            }
+            if (level > 0) {
+                fr_as_fine = getAdvFluxReg(level);
+            }
+        }
+
         // Moving terrain
-        if ( solverChoice.use_terrain &&  (solverChoice.terrain_type == 1) )
+        if ( solverChoice.use_terrain &&  (solverChoice.terrain_type == TerrainType::Moving) )
         {
             // Note that the "old" and "new" metric terms correspond to
             // t^n and the RK stage (either t^*, t^** or t^{n+1} that this source
@@ -28,18 +43,18 @@
             // aka old_stage_time
 
             if (verbose) Print() << "Re-making old geometry at old time   : " << old_step_time << std::endl;
-            init_custom_terrain(fine_geom,*z_phys_nd[level],old_step_time);
-            init_terrain_grid  (fine_geom,*z_phys_nd[level]);
+            prob->init_custom_terrain(fine_geom,*z_phys_nd[level],old_step_time);
+            init_terrain_grid  (fine_geom,*z_phys_nd[level], zlevels_stag);
             make_J             (fine_geom,*z_phys_nd[level], *detJ_cc[level]);
 
             if (verbose) Print() << "Making src geometry at old_stage_time:  " << old_stage_time << std::endl;
-            init_custom_terrain(fine_geom,*z_phys_nd_src[level],old_stage_time);
-            init_terrain_grid  (fine_geom,*z_phys_nd_src[level]);
+            prob->init_custom_terrain(fine_geom,*z_phys_nd_src[level],old_stage_time);
+            init_terrain_grid  (fine_geom,*z_phys_nd_src[level], zlevels_stag);
             make_J             (fine_geom,*z_phys_nd_src[level], *detJ_cc_src[level]);
 
             if (verbose) Print() << "Making new geometry at new_stage_time: " << new_stage_time << std::endl;
-            init_custom_terrain(fine_geom,*z_phys_nd_new[level],new_stage_time);
-            init_terrain_grid  (fine_geom,*z_phys_nd_new[level]);
+            prob->init_custom_terrain(fine_geom,*z_phys_nd_new[level],new_stage_time);
+            init_terrain_grid  (fine_geom,*z_phys_nd_new[level], zlevels_stag);
             make_J             (fine_geom,*z_phys_nd_new[level], *detJ_cc_new[level]);
 
             Real inv_dt  = 1./slow_dt;
@@ -74,13 +89,13 @@
             MultiFab* r0_new = &r_hse_new;
             MultiFab* p0_new = &p_hse_new;
 
-            make_buoyancy(grids_to_evolve[level], S_data, S_prim, buoyancy,
+            make_buoyancy(S_data, S_prim, buoyancy,
 #if defined(ERF_USE_MOISTURE)
                           qmoist[level], qv_d, qc_d, qi_d,
 #endif
                           fine_geom, solverChoice, r0_new);
 
-            erf_slow_rhs_pre(level, nrk, slow_dt, grids_to_evolve[level], S_rhs, S_data, S_prim, S_scratch,
+            erf_slow_rhs_pre(level, finest_level, nrk, slow_dt, S_rhs, S_data, S_prim, S_scratch,
                              xvel_new, yvel_new, zvel_new,
 #if defined(ERF_USE_MOISTURE)
                              qmoist[level],
@@ -91,6 +106,7 @@
                              fine_geom, solverChoice, m_most, domain_bcs_type_d, domain_bcs_type,
                              z_phys_nd_src[level], detJ_cc_src[level], p0_new,
                              mapfac_m[level], mapfac_u[level], mapfac_v[level],
+                             fr_as_crse, fr_as_fine,
                              dptr_rayleigh_tau, dptr_rayleigh_ubar,
                              dptr_rayleigh_vbar, dptr_rayleigh_wbar,
                              dptr_rayleigh_thetabar);
@@ -104,8 +120,8 @@
 
             // Remember this does NOT maintain dp_0 / dz = -rho_0 g, so we can no longer
             //    discretize the vertical pressure gradient in perturbational form.
-            AMREX_ALWAYS_ASSERT(solverChoice.dycore_horiz_adv_type == AdvType::Centered_2nd);
-            AMREX_ALWAYS_ASSERT(solverChoice.dycore_vert_adv_type  == AdvType::Centered_2nd);
+            AMREX_ALWAYS_ASSERT(solverChoice.advChoice.dycore_horiz_adv_type == AdvType::Centered_2nd);
+            AMREX_ALWAYS_ASSERT(solverChoice.advChoice.dycore_vert_adv_type  == AdvType::Centered_2nd);
 
             Real dt_base  = (new_stage_time - old_step_time);
 
@@ -170,13 +186,13 @@
         } else {
 
             // If not moving_terrain
-            make_buoyancy(grids_to_evolve[level], S_data, S_prim, buoyancy,
+            make_buoyancy(S_data, S_prim, buoyancy,
 #if defined(ERF_USE_MOISTURE)
                           qmoist[level], qv_d, qc_d, qi_d,
 #endif
                           fine_geom, solverChoice, r0);
 
-            erf_slow_rhs_pre(level, nrk, slow_dt, grids_to_evolve[level], S_rhs, S_data, S_prim, S_scratch,
+            erf_slow_rhs_pre(level, finest_level, nrk, slow_dt, S_rhs, S_data, S_prim, S_scratch,
                              xvel_new, yvel_new, zvel_new,
 #if defined(ERF_USE_MOISTURE)
                              qmoist[level],
@@ -187,6 +203,7 @@
                              fine_geom, solverChoice, m_most, domain_bcs_type_d, domain_bcs_type,
                              z_phys_nd[level], detJ_cc[level], p0,
                              mapfac_m[level], mapfac_u[level], mapfac_v[level],
+                             fr_as_crse, fr_as_fine,
                              dptr_rayleigh_tau, dptr_rayleigh_ubar,
                              dptr_rayleigh_vbar, dptr_rayleigh_wbar,
                              dptr_rayleigh_thetabar);
@@ -194,21 +211,28 @@
 
 #ifdef ERF_USE_NETCDF
         // Populate RHS for relaxation zones
-        if (init_type=="real" && level==0) {
-            wrfbdy_compute_interior_ghost_RHS(bdy_time_interval, start_bdy_time, new_stage_time, slow_dt,
-                                              wrfbdy_width-1, wrfbdy_set_width, fine_geom,
+        if (((init_type == "real") || (init_type == "metgrid")) && level == 0) {
+            int width, set_width;
+            if (init_type == "real") {
+                width = wrfbdy_width;
+                set_width = wrfbdy_set_width;
+            } else if (init_type == "metgrid") {
+                width = metgrid_bdy_width;
+                set_width = metgrid_bdy_set_width;
+            }
+            wrfbdy_compute_interior_ghost_rhs(init_type, bdy_time_interval, start_bdy_time, new_stage_time, slow_dt,
+                                              width-1, set_width, fine_geom,
                                               S_rhs, S_data, bdy_data_xlo, bdy_data_xhi,
                                               bdy_data_ylo, bdy_data_yhi);
         }
 #endif
 
         // Compute RHS for fine interior ghost
-        if (level>0 && coupling_type=="OneWay" && cf_width>0) {
-            fine_compute_interior_ghost_RHS(new_stage_time, slow_dt,
-                                            cf_width-1, cf_set_width, fine_geom,
+        if (level>0 && solverChoice.coupling_type != CouplingType::TwoWay && cf_width>0) {
+            fine_compute_interior_ghost_rhs(new_stage_time, slow_dt,
+                                            cf_width, cf_set_width, fine_geom,
                                             &FPr_c[level-1], &FPr_u[level-1], &FPr_v[level-1], &FPr_w[level-1],
-                                            boxes_at_level[level], domain_bcs_type,
-                                            S_rhs, S_data);
+                                            domain_bcs_type, S_rhs, S_data);
         }
 
         // S_rhs[IntVar::cons].FillBoundary(fine_geom.periodicity());
@@ -265,38 +289,62 @@
         // Flag for moisture relaxation zone
         bool moist_zero = false;
         if (init_type=="real" && level==0 && wrfbdy_set_width>0)  moist_zero = true;
+        if (init_type=="metgrid" && level==0 && metgrid_bdy_set_width > 0) moist_zero = true;
 #endif
 
+        // *************************************************************************
+        // Set up flux registers if using mixed or two_way coupling
+        // *************************************************************************
+        YAFluxRegister* fr_as_crse = nullptr;
+        YAFluxRegister* fr_as_fine = nullptr;
+        if (solverChoice.coupling_type == CouplingType::TwoWay ||
+            solverChoice.coupling_type == CouplingType::Mixed)
+        {
+            if (level < finest_level) {
+                fr_as_crse = getAdvFluxReg(level+1);
+                // For Mixed we haven't reset this in erf_slow_rhs_pre but we need to here.
+                if (solverChoice.coupling_type == CouplingType::Mixed)
+                {
+                    fr_as_crse->reset();
+                }
+            }
+            if (level > 0) {
+                fr_as_fine = getAdvFluxReg(level);
+            }
+        }
+
         // Moving terrain
-        if ( solverChoice.use_terrain && (solverChoice.terrain_type == 1) ) {
-            erf_slow_rhs_post(level, nrk, slow_dt,
+        if ( solverChoice.use_terrain && (solverChoice.terrain_type == TerrainType::Moving) ) {
+            erf_slow_rhs_post(level, finest_level, nrk, slow_dt,
                               S_rhs, S_old, S_new, S_data, S_prim, S_scratch,
                               xvel_new, yvel_new, zvel_new,
                               source, SmnSmn, eddyDiffs,
                               Hfx3, Diss,
                               fine_geom, solverChoice, m_most, domain_bcs_type_d,
                               z_phys_nd_src[level], detJ_cc[level], detJ_cc_new[level],
-                              mapfac_m[level], mapfac_u[level], mapfac_v[level]
+                              mapfac_m[level], mapfac_u[level], mapfac_v[level],
 #if defined(ERF_USE_NETCDF) && (defined(ERF_USE_MOISTURE) || defined(ERF_USE_WARM_NO_PRECIP))
-                              ,moist_zero, bdy_time_interval, start_bdy_time, new_stage_time,
+                              moist_zero, bdy_time_interval, start_bdy_time, new_stage_time,
                               wrfbdy_width-1, wrfbdy_set_width,
-                              bdy_data_xlo, bdy_data_xhi, bdy_data_ylo, bdy_data_yhi
+                              bdy_data_xlo, bdy_data_xhi, bdy_data_ylo, bdy_data_yhi,
 #endif
+                              fr_as_crse, fr_as_fine
                               );
         } else {
-            erf_slow_rhs_post(level, nrk, slow_dt,
+            erf_slow_rhs_post(level, finest_level, nrk, slow_dt,
                               S_rhs, S_old, S_new, S_data, S_prim, S_scratch,
                               xvel_new, yvel_new, zvel_new,
                               source, SmnSmn, eddyDiffs,
                               Hfx3, Diss,
                               fine_geom, solverChoice, m_most, domain_bcs_type_d,
                               z_phys_nd[level], detJ_cc[level], detJ_cc[level],
-                              mapfac_m[level], mapfac_u[level], mapfac_v[level]
+                              mapfac_m[level], mapfac_u[level], mapfac_v[level],
 #if defined(ERF_USE_NETCDF) && (defined(ERF_USE_MOISTURE) || defined(ERF_USE_WARM_NO_PRECIP))
-                              ,moist_zero, bdy_time_interval, start_bdy_time, new_stage_time,
+                              moist_zero, bdy_time_interval, start_bdy_time, new_stage_time,
                               wrfbdy_width-1, wrfbdy_set_width,
-                              bdy_data_xlo, bdy_data_xhi, bdy_data_ylo, bdy_data_yhi
+                              bdy_data_xlo, bdy_data_xhi, bdy_data_ylo, bdy_data_yhi,
 #endif
+                              fr_as_crse, fr_as_fine
                               );
         }
     }; // end slow_rhs_fun_post
@@ -318,13 +366,13 @@
         Real slow_dt = new_stage_time - old_step_time;
 
         // If not moving_terrain
-        make_buoyancy(grids_to_evolve[level], S_data, S_prim, buoyancy,
+        make_buoyancy(S_data, S_prim, buoyancy,
 #if defined(ERF_USE_MOISTURE)
                       qmoist[level], qv_d, qc_d, qi_d,
 #endif
                       fine_geom, solverChoice, r0);
 
-        erf_slow_rhs_inc(level, nrk, slow_dt, grids_to_evolve[level],
+        erf_slow_rhs_inc(level, nrk, slow_dt,
                          S_rhs, S_old, S_data, S_prim, S_scratch,
                          xvel_new, yvel_new, zvel_new,
 #if defined(ERF_USE_MOISTURE)
@@ -342,18 +390,26 @@
 
 #ifdef ERF_USE_NETCDF
         // Populate RHS for relaxation zones
-        if (init_type=="real" && level==0) {
-            wrfbdy_compute_interior_ghost_RHS(bdy_time_interval, start_bdy_time, new_stage_time, slow_dt,
-                                              wrfbdy_width-1, wrfbdy_set_width, fine_geom,
+        if (((init_type == "real") || (init_type == "metgrid")) && level == 0) {
+            int width, set_width;
+            if (init_type == "real") {
+                width = wrfbdy_width;
+                set_width = wrfbdy_set_width;
+            } else if (init_type == "metgrid") {
+                width = metgrid_bdy_width;
+                set_width = metgrid_bdy_set_width;
+            }
+            wrfbdy_compute_interior_ghost_rhs(init_type, bdy_time_interval, start_bdy_time, new_stage_time, slow_dt,
+                                              width-1, set_width, fine_geom,
                                               S_rhs, S_data, bdy_data_xlo, bdy_data_xhi,
                                               bdy_data_ylo, bdy_data_yhi);
         }
 #endif
 
         // Compute RHS for fine interior ghost
-        if (level>0 && coupling_type=="OneWay" && cf_width>0) {
-            fine_compute_interior_ghost_RHS(new_stage_time, slow_dt,
-                                            cf_width-1, cf_set_width,
+        if (level>0 && solverChoice.coupling_type != CouplingType::TwoWay && cf_width>0) {
+            fine_compute_interior_ghost_rhs(new_stage_time, slow_dt,
+                                            cf_width, cf_set_width,
                                             &FPr_c[level-1], &FPr_u[level-1], &FPr_v[level-1], &FPr_w[level-1],
                                             boxes_at_level[level], domain_bcs_type,
                                             S_rhs, S_data);

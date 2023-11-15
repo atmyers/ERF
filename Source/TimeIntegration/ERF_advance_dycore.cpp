@@ -58,6 +58,9 @@ void ERF::advance_dycore(int level,
     BL_PROFILE_VAR("erf_advance_dycore()",erf_advance_dycore);
     if (verbose) amrex::Print() << "Starting advance_dycore at level " << level << std::endl;
 
+    DiffChoice dc = solverChoice.diffChoice;
+    TurbChoice tc = solverChoice.turbChoice[level];
+
     int nvars = cons_old.nComp();
 
     MultiFab r_hse (base_state[level], make_alias, 0, 1); // r_0 is first  component
@@ -70,6 +73,7 @@ void ERF::advance_dycore(int level,
     MultiFab qice   (qmoist[level], make_alias, 2, 1);
 #endif
 
+    // These pointers are used in the MRI utility functions
     MultiFab* r0  = &r_hse;
     MultiFab* p0  = &p_hse;
     MultiFab* pi0 = &pi_hse;
@@ -81,11 +85,11 @@ void ERF::advance_dycore(int level,
     Real* dptr_rayleigh_thetabar = solverChoice.use_rayleigh_damping ? d_rayleigh_thetabar[level].data() : nullptr;
 
     bool l_use_terrain = solverChoice.use_terrain;
-    bool l_use_diff    = ( (solverChoice.molec_diff_type != MolecDiffType::None) ||
-                           (solverChoice.les_type        !=       LESType::None) ||
-                           (solverChoice.pbl_type        !=       PBLType::None) );
-    bool l_use_kturb   = ( (solverChoice.les_type != LESType::None)   ||
-                           (solverChoice.pbl_type != PBLType::None) );
+    bool l_use_diff    = ( (dc.molec_diff_type != MolecDiffType::None) ||
+                           (tc.les_type        !=       LESType::None) ||
+                           (tc.pbl_type        !=       PBLType::None) );
+    bool l_use_kturb   = ( (tc.les_type != LESType::None)   ||
+                           (tc.pbl_type != PBLType::None) );
 
     const BoxArray& ba            = cons_old.boxArray();
     const BoxArray& ba_z          = zvel_old.boxArray();
@@ -212,13 +216,15 @@ void ERF::advance_dycore(int level,
     // *************************************************************************
     if (l_use_kturb)
     {
+        // NOTE: state_new transfers to state_old for PBL (due to ptr swap in advance)
+        const amrex::BCRec* bc_ptr_d = domain_bcs_type_d.data();
         ComputeTurbulentViscosity(xvel_old, yvel_old,
                                   *Tau11, *Tau22, *Tau33,
                                   *Tau12, *Tau13, *Tau23,
-                                  state_old[IntVar::cons],
+                                  state_old[IntVar::cons],state_new[IntVar::cons],
                                   *eddyDiffs, *Hfx1, *Hfx2, *Hfx3, *Diss, // to be updated
                                   fine_geom, *mapfac_u[level], *mapfac_v[level],
-                                  solverChoice, m_most);
+                                  tc, solverChoice.gravity, m_most, bc_ptr_d);
     }
 
     // ***********************************************************************************************
@@ -308,11 +314,11 @@ void ERF::advance_dycore(int level,
     mri_integrator.advance(state_old, state_new, old_time, dt_advance);
 
     // Register coarse data for coarse-fine fill
-    if (level<finest_level && coupling_type=="OneWay" && cf_width>0) {
-        FPr_c[level].registerCoarseData({&cons_old, &cons_new}, {old_time, old_time + dt_advance});
-        FPr_u[level].registerCoarseData({&xvel_old, &xvel_new}, {old_time, old_time + dt_advance});
-        FPr_v[level].registerCoarseData({&yvel_old, &yvel_new}, {old_time, old_time + dt_advance});
-        FPr_w[level].registerCoarseData({&zvel_old, &zvel_new}, {old_time, old_time + dt_advance});
+    if (level<finest_level && solverChoice.coupling_type != CouplingType::TwoWay && cf_width>0) {
+        FPr_c[level].RegisterCoarseData({&cons_old, &cons_new}, {old_time, old_time + dt_advance});
+        FPr_u[level].RegisterCoarseData({&xvel_old, &xvel_new}, {old_time, old_time + dt_advance});
+        FPr_v[level].RegisterCoarseData({&yvel_old, &yvel_new}, {old_time, old_time + dt_advance});
+        FPr_w[level].RegisterCoarseData({&zvel_old, &zvel_new}, {old_time, old_time + dt_advance});
     }
 
     if (verbose) Print() << "Done with advance_dycore at level " << level << std::endl;

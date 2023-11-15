@@ -36,8 +36,8 @@ void ERF::MakeNewLevelFromScratch (int lev, Real time, const BoxArray& ba,
 
     // The number of ghost cells for density must be 1 greater than that for velocity
     //     so that we can go back in forth betwen velocity and momentum on all faces
-    int ngrow_state = ComputeGhostCells(solverChoice) + 1;
-    int ngrow_vels  = ComputeGhostCells(solverChoice);
+    int ngrow_state = ComputeGhostCells(solverChoice.advChoice, solverChoice.use_NumDiff) + 1;
+    int ngrow_vels  = ComputeGhostCells(solverChoice.advChoice, solverChoice.use_NumDiff);
 
     auto& lev_new = vars_new[lev];
     auto& lev_old = vars_old[lev];
@@ -88,7 +88,7 @@ void ERF::MakeNewLevelFromScratch (int lev, Real time, const BoxArray& ba,
     mapfac_m[lev] = std::make_unique<MultiFab>(ba2d,dm,1,3);
     mapfac_u[lev] = std::make_unique<MultiFab>(convert(ba2d,IntVect(1,0,0)),dm,1,3);
     mapfac_v[lev] = std::make_unique<MultiFab>(convert(ba2d,IntVect(0,1,0)),dm,1,3);
-    if(solverChoice.test_mapfactor) {
+    if (solverChoice.test_mapfactor) {
         mapfac_m[lev]->setVal(0.5);
         mapfac_u[lev]->setVal(0.5);
         mapfac_v[lev]->setVal(0.5);
@@ -105,7 +105,7 @@ void ERF::MakeNewLevelFromScratch (int lev, Real time, const BoxArray& ba,
     base_state[lev].define(ba,dm,3,1);
     base_state[lev].setVal(0.);
 
-    if (solverChoice.use_terrain && solverChoice.terrain_type > 0) {
+    if (solverChoice.use_terrain && solverChoice.terrain_type != TerrainType::Static) {
         base_state_new[lev].define(ba,dm,3,1);
         base_state_new[lev].setVal(0.);
     }
@@ -114,7 +114,7 @@ void ERF::MakeNewLevelFromScratch (int lev, Real time, const BoxArray& ba,
         z_phys_cc[lev] = std::make_unique<MultiFab>(ba,dm,1,1);
           detJ_cc[lev] = std::make_unique<MultiFab>(ba,dm,1,1);
 
-        if (solverChoice.terrain_type > 0) {
+        if (solverChoice.terrain_type != TerrainType::Static) {
             detJ_cc_new[lev] = std::make_unique<MultiFab>(ba,dm,1,1);
             detJ_cc_src[lev] = std::make_unique<MultiFab>(ba,dm,1,1);
             z_t_rk[lev] = std::make_unique<MultiFab>( convert(ba, IntVect(0,0,1)), dm, 1, 1 );
@@ -124,9 +124,9 @@ void ERF::MakeNewLevelFromScratch (int lev, Real time, const BoxArray& ba,
         ba_nd.surroundingNodes();
 
         // We need this to be one greater than the ghost cells to handle levels > 0
-        int ngrow = ComputeGhostCells(solverChoice) + 2;
+        int ngrow = ComputeGhostCells(solverChoice.advChoice, solverChoice.use_NumDiff) + 2;
         z_phys_nd[lev] = std::make_unique<MultiFab>(ba_nd,dm,1,IntVect(ngrow,ngrow,1));
-        if (solverChoice.terrain_type > 0) {
+        if (solverChoice.terrain_type != TerrainType::Static) {
             z_phys_nd_new[lev] = std::make_unique<MultiFab>(ba_nd,dm,1,IntVect(ngrow,ngrow,1));
             z_phys_nd_src[lev] = std::make_unique<MultiFab>(ba_nd,dm,1,IntVect(ngrow,ngrow,1));
         }
@@ -144,6 +144,9 @@ void ERF::MakeNewLevelFromScratch (int lev, Real time, const BoxArray& ba,
 
                z_t_rk[lev] = nullptr;
     }
+
+    sst_lev[lev].resize(1);     sst_lev[lev][0] = nullptr;
+    lmask_lev[lev].resize(1); lmask_lev[lev][0] = nullptr;
 
     // ********************************************************************************************
     // Define Theta_prim storage if using MOST BC
@@ -167,7 +170,7 @@ void ERF::MakeNewLevelFromScratch (int lev, Real time, const BoxArray& ba,
     //                          since we may need to use the grid information before constructing
     //                          initial idealized data
     // ********************************************************************************************
-    if (init_type == "real") {
+    if ((init_type == "real") || (init_type == "metgrid")) {
 
         // If called from restart, the data structures for terrain-related quantities
         //    are built in the ReadCheckpoint routine.  Otherwise we build them here.
@@ -235,8 +238,6 @@ ERF::MakeNewLevelFromCoarse (int lev, Real time, const BoxArray& ba,
     // Build the data structures for calculating diffusive/turbulent terms
     update_arrays(lev, ba, dm);
 
-    define_grids_to_evolve(lev, grids[lev]);
-
     FillCoarsePatch(lev, time, {&lev_new[Vars::cons],&lev_new[Vars::xvel],
                                 &lev_new[Vars::yvel],&lev_new[Vars::zvel]});
 
@@ -250,13 +251,11 @@ ERF::MakeNewLevelFromCoarse (int lev, Real time, const BoxArray& ba,
 void
 ERF::RemakeLevel (int lev, Real time, const BoxArray& ba, const DistributionMapping& dm)
 {
-    define_grids_to_evolve(lev, ba);
-
     Vector<MultiFab> temp_lev_new(Vars::NumTypes);
     Vector<MultiFab> temp_lev_old(Vars::NumTypes);
 
-    int ngrow_state = ComputeGhostCells(solverChoice) + 1;
-    int ngrow_vels  = ComputeGhostCells(solverChoice);
+    int ngrow_state = ComputeGhostCells(solverChoice.advChoice, solverChoice.use_NumDiff) + 1;
+    int ngrow_vels  = ComputeGhostCells(solverChoice.advChoice, solverChoice.use_NumDiff);
 
     temp_lev_new[Vars::cons].define(ba, dm, Cons::NumVars, ngrow_state);
     temp_lev_old[Vars::cons].define(ba, dm, Cons::NumVars, ngrow_state);
@@ -286,7 +285,7 @@ ERF::RemakeLevel (int lev, Real time, const BoxArray& ba, const DistributionMapp
     // This will fill the temporary MultiFabs with data from vars_new
     // ********************************************************************************************
     FillPatch(lev, time, {&temp_lev_new[Vars::cons],&temp_lev_new[Vars::xvel],
-                          &temp_lev_new[Vars::yvel],&temp_lev_new[Vars::zvel]});
+                          &temp_lev_new[Vars::yvel],&temp_lev_new[Vars::zvel]}, false);
 
     // ********************************************************************************************
     // Copy from new into old just in case
@@ -332,7 +331,7 @@ ERF::RemakeLevel (int lev, Real time, const BoxArray& ba, const DistributionMapp
     mapfac_m[lev] = std::make_unique<MultiFab>(ba2d,dm,1,3);
     mapfac_u[lev] = std::make_unique<MultiFab>(convert(ba2d,IntVect(1,0,0)),dm,1,3);
     mapfac_v[lev] = std::make_unique<MultiFab>(convert(ba2d,IntVect(0,1,0)),dm,1,3);
-    if(solverChoice.test_mapfactor) {
+    if (solverChoice.test_mapfactor) {
         mapfac_m[lev]->setVal(0.5);
         mapfac_u[lev]->setVal(0.5);
         mapfac_v[lev]->setVal(0.5);
@@ -354,12 +353,12 @@ ERF::update_arrays (int lev, const BoxArray& ba, const DistributionMapping& dm)
     // Diffusive terms
     // ********************************************************************************************
     bool l_use_terrain = solverChoice.use_terrain;
-    bool l_use_diff    = ( (solverChoice.molec_diff_type != MolecDiffType::None) ||
-                           (solverChoice.les_type        !=       LESType::None) ||
-                           (solverChoice.pbl_type        !=       PBLType::None) );
-    bool l_use_kturb   = ( (solverChoice.les_type != LESType::None)   ||
-                           (solverChoice.pbl_type != PBLType::None) );
-    bool l_use_ddorf   = (solverChoice.les_type == LESType::Deardorff);
+    bool l_use_diff    = ( (solverChoice.diffChoice.molec_diff_type != MolecDiffType::None) ||
+                           (solverChoice.turbChoice[lev].les_type        !=       LESType::None) ||
+                           (solverChoice.turbChoice[lev].pbl_type        !=       PBLType::None) );
+    bool l_use_kturb   = ( (solverChoice.turbChoice[lev].les_type        != LESType::None)   ||
+                           (solverChoice.turbChoice[lev].pbl_type        != PBLType::None) );
+    bool l_use_ddorf   = (  solverChoice.turbChoice[lev].les_type        == LESType::Deardorff);
 
     BoxArray ba12 = convert(ba, IntVect(1,1,0));
     BoxArray ba13 = convert(ba, IntVect(1,0,1));
@@ -385,6 +384,10 @@ ERF::update_arrays (int lev, const BoxArray& ba, const DistributionMapping& dm)
         SFS_hfx2_lev[lev] = std::make_unique<MultiFab>( ba  , dm, 1, IntVect(1,1,0) );
         SFS_hfx3_lev[lev] = std::make_unique<MultiFab>( ba  , dm, 1, IntVect(1,1,0) );
         SFS_diss_lev[lev] = std::make_unique<MultiFab>( ba  , dm, 1, IntVect(1,1,0) );
+        SFS_hfx1_lev[lev]->setVal(0.);
+        SFS_hfx2_lev[lev]->setVal(0.);
+        SFS_hfx3_lev[lev]->setVal(0.);
+        SFS_diss_lev[lev]->setVal(0.);
     } else {
       Tau11_lev[lev] = nullptr; Tau22_lev[lev] = nullptr; Tau33_lev[lev] = nullptr;
       Tau12_lev[lev] = nullptr; Tau21_lev[lev] = nullptr;
@@ -396,6 +399,7 @@ ERF::update_arrays (int lev, const BoxArray& ba, const DistributionMapping& dm)
 
     if (l_use_kturb) {
       eddyDiffs_lev[lev] = std::make_unique<MultiFab>( ba, dm, EddyDiff::NumDiffs, 1 );
+      eddyDiffs_lev[lev]->setVal(0.0);
       if(l_use_ddorf) {
           SmnSmn_lev[lev] = std::make_unique<MultiFab>( ba, dm, 1, 0 );
       } else {
@@ -412,8 +416,8 @@ ERF::update_terrain_arrays (int lev, Real time)
 {
     if (solverChoice.use_terrain) {
         if (init_type != "real" && init_type != "metgrid") {
-            init_custom_terrain(geom[lev],*z_phys_nd[lev],time);
-            init_terrain_grid(geom[lev],*z_phys_nd[lev]);
+            prob->init_custom_terrain(geom[lev],*z_phys_nd[lev],time);
+            init_terrain_grid(geom[lev],*z_phys_nd[lev],zlevels_stag);
         }
         if (lev>0 && (init_type == "real" || init_type == "metgrid")) {
             PhysBCFunctNoOp empty_bc;
@@ -433,7 +437,7 @@ ERF::update_terrain_arrays (int lev, Real time)
 }
 
 void
-ERF::initialize_integrator(int lev, MultiFab& cons_mf, MultiFab& vel_mf)
+ERF::initialize_integrator (int lev, MultiFab& cons_mf, MultiFab& vel_mf)
 {
     const BoxArray& ba(cons_mf.boxArray());
     const DistributionMapping& dm(cons_mf.DistributionMap());
@@ -482,6 +486,4 @@ ERF::ClearLevel (int lev)
     // Clears the integrator memory
     mri_integrator_mem[lev].reset();
     physbcs[lev].reset();
-
-    grids_to_evolve[lev].clear();
 }

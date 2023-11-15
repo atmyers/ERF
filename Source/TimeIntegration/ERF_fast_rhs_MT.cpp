@@ -15,38 +15,43 @@ using namespace amrex;
 /**
  * Function for computing the fast RHS with moving terrain
  *
- * @param[in]  step  which fast time step
- * @param[in]  level level of resolution
- * @param[in]  grids_to_evolve the region in the domain excluding the relaxation and specified zones
- * @param[in]  S_slow_rhs slow RHS computed in erf_slow_rhs_pre
- * @param[in]  S_prev previous solution
- * @param[in]  S_stg_data solution            at previous RK stage
- * @param[in]  S_stg_prim primitive variables at previous RK stage
- * @param[in]  pi_stage   Exner function      at previous RK stage
- * @param[in]  fast_coeffs coefficients for the tridiagonal solve used in the fast integrator
- * @param[out] S_data current solution
- * @param[in]  S_scratch scratch space
- * @param[in]  geom container for geometric information
- * @param[in]  solverChoice  Container for solver parameters
- * @param[in]  Omega component of the momentum normal to the z-coordinate surface
- * @param[in]  z_t_rk rate of change of grid height -- only relevant for moving terrain
- * @param[in]  z_t_pert rate of change of grid height -- interpolated between RK stages
- * @param[in] z_phys_nd_old height coordinate at nodes at old time
- * @param[in] z_phys_nd_new height coordinate at nodes at new time
- * @param[in] z_phys_nd_stg height coordinate at nodes at previous stage
- * @param[in] detJ_cc_old Jacobian of the metric transformation at old time
- * @param[in] detJ_cc_new Jacobian of the metric transformation at new time
- * @param[in] detJ_cc_stg Jacobian of the metric transformation at previous stage
- * @param[in]  dtau fast time step
- * @param[in]  beta_s  Coefficient which determines how implicit vs explicit the solve is
- * @param[in]  facinv inverse factor for time-averaging the momenta
- * @param[in] mapfac_m map factor at cell centers
- * @param[in] mapfac_u map factor at x-faces
- * @param[in] mapfac_v map factor at y-faces
+ * @param[in]    step  which fast time step within each Runge-Kutta step
+ * @param[in]    nrk   which Runge-Kutta step
+ * @param[in]    level level of resolution
+ * @param[in]    finest_level finest level of resolution
+ * @param[in]    S_slow_rhs slow RHS computed in erf_slow_rhs_pre
+ * @param[in]    S_prev previous solution
+ * @param[in]    S_stg_data solution            at previous RK stage
+ * @param[in]    S_stg_prim primitive variables at previous RK stage
+ * @param[in]    pi_stage   Exner function      at previous RK stage
+ * @param[in]    fast_coeffs coefficients for the tridiagonal solve used in the fast integrator
+ * @param[out]   S_data current solution
+ * @param[in]    S_scratch scratch space
+ * @param[in]    geom container for geometric information
+ * @param[in]    gravity Magnitude of gravity
+ * @param[in]    use_lagged_delta_rt define lagged_delta_rt for our next step
+ * @param[in]    Omega component of the momentum normal to the z-coordinate surface
+ * @param[in]    z_t_rk rate of change of grid height -- only relevant for moving terrain
+ * @param[in]    z_t_pert rate of change of grid height -- interpolated between RK stages
+ * @param[in]    z_phys_nd_old height coordinate at nodes at old time
+ * @param[in]    z_phys_nd_new height coordinate at nodes at new time
+ * @param[in]    z_phys_nd_stg height coordinate at nodes at previous stage
+ * @param[in]    detJ_cc_old Jacobian of the metric transformation at old time
+ * @param[in]    detJ_cc_new Jacobian of the metric transformation at new time
+ * @param[in]    detJ_cc_stg Jacobian of the metric transformation at previous stage
+ * @param[in]    dtau fast time step
+ * @param[in]    beta_s  Coefficient which determines how implicit vs explicit the solve is
+ * @param[in]    facinv inverse factor for time-averaging the momenta
+ * @param[in]    mapfac_m map factor at cell centers
+ * @param[in]    mapfac_u map factor at x-faces
+ * @param[in]    mapfac_v map factor at y-faces
+ * @param[inout] fr_as_crse YAFluxRegister at level l at level l   / l+1 interface
+ * @param[inout] fr_as_fine YAFluxRegister at level l at level l-1 / l   interface
+ * @param[in]    l_reflux should we add fluxes to the FluxRegisters?
  */
 
-void erf_fast_rhs_MT (int step, int /*level*/,
-                      BoxArray& grids_to_evolve,
+void erf_fast_rhs_MT (int step, int nrk,
+                      int level, int finest_level,
                       Vector<MultiFab>& S_slow_rhs,                  // the slow RHS already computed
                       const Vector<MultiFab>& S_prev,                // if step == 0, this is S_old, else the previous solution
                       Vector<MultiFab>& S_stg_data,                  // at last RK stg: S^n, S^* or S^**
@@ -55,8 +60,9 @@ void erf_fast_rhs_MT (int step, int /*level*/,
                       const MultiFab& fast_coeffs,                   // Coeffs for tridiagonal solve
                       Vector<MultiFab>& S_data,                      // S_sum = state at end of this substep
                       Vector<MultiFab>& S_scratch,                   // S_sum_old at most recent fast timestep for (rho theta)
-                      const amrex::Geometry geom,
-                      const SolverChoice& solverChoice,
+                      const Geometry geom,
+                      const Real gravity,
+                      const bool use_lagged_delta_rt,
                             MultiFab& Omega,
                       std::unique_ptr<MultiFab>& z_t_rk,             // evaluated from previous RK stg to next RK stg
                       const MultiFab* z_t_pert,                      // evaluated from tau to (tau + delta tau) - z_t_rk
@@ -68,13 +74,14 @@ void erf_fast_rhs_MT (int step, int /*level*/,
                       std::unique_ptr<MultiFab>& detJ_cc_stg,        // at last RK stg
                       const Real dtau, const Real beta_s,
                       const Real facinv,
-                      std::unique_ptr<MultiFab>& /*mapfac_m*/,
+                      std::unique_ptr<MultiFab>& mapfac_m,
                       std::unique_ptr<MultiFab>& mapfac_u,
-                      std::unique_ptr<MultiFab>& mapfac_v)
+                      std::unique_ptr<MultiFab>& mapfac_v,
+                      YAFluxRegister* fr_as_crse,
+                      YAFluxRegister* fr_as_fine,
+                      bool l_reflux)
 {
     BL_PROFILE_REGION("erf_fast_rhs_MT()");
-
-    AMREX_ASSERT(solverChoice.terrain_type == 1);
 
     Real beta_1 = 0.5 * (1.0 - beta_s);  // multiplies explicit terms
     Real beta_2 = 0.5 * (1.0 + beta_s);  // multiplies implicit terms
@@ -82,6 +89,7 @@ void erf_fast_rhs_MT (int step, int /*level*/,
     // How much do we project forward the (rho theta) that is used in the horizontal momentum equations
     Real beta_d = 0.1;
 
+    const Real* dx = geom.CellSize();
     const GpuArray<Real, AMREX_SPACEDIM> dxInv = geom.InvCellSizeArray();
 
     Real dxi = dxInv[0];
@@ -96,7 +104,7 @@ void erf_fast_rhs_MT (int step, int /*level*/,
 
     // *************************************************************************
     // Set gravity as a vector
-    const    Array<Real,AMREX_SPACEDIM> grav{0.0, 0.0, -solverChoice.gravity};
+    const    Array<Real,AMREX_SPACEDIM> grav{0.0, 0.0, -gravity};
     const GpuArray<Real,AMREX_SPACEDIM> grav_gpu{grav[0], grav[1], grav[2]};
 
     MultiFab extrap(S_data[IntVar::cons].boxArray(),S_data[IntVar::cons].DistributionMap(),1,1);
@@ -113,14 +121,13 @@ void erf_fast_rhs_MT (int step, int /*level*/,
     FArrayBox RHS_fab;
     FArrayBox soln_fab;
 
+    std::array<FArrayBox,AMREX_SPACEDIM> flux;
+
     //  NOTE: we leave tiling off here for efficiency -- to make this loop work with tiling
     //        will require additional changes
     for ( MFIter mfi(S_stg_data[IntVar::cons],false); mfi.isValid(); ++mfi)
     {
-        // Construct intersection of current tilebox and valid region for updating
-        Box valid_bx = grids_to_evolve[mfi.index()];
-        Box       bx = mfi.tilebox() & valid_bx;
-
+        Box bx  = mfi.tilebox();
         Box tbx = surroundingNodes(bx,0);
         Box tby = surroundingNodes(bx,1);
         Box tbz = surroundingNodes(bx,2);
@@ -129,7 +136,7 @@ void erf_fast_rhs_MT (int step, int /*level*/,
         const Array4<const Real> & stg_xmom = S_stg_data[IntVar::xmom].const_array(mfi);
         const Array4<const Real> & stg_ymom = S_stg_data[IntVar::ymom].const_array(mfi);
         const Array4<const Real> & stg_zmom = S_stg_data[IntVar::zmom].const_array(mfi);
-        const Array4<const Real> & prim       = S_stg_prim.const_array(mfi);
+        const Array4<const Real> & prim     = S_stg_prim.const_array(mfi);
 
         const Array4<const Real>& slow_rhs_cons  = S_slow_rhs[IntVar::cons].const_array(mfi);
         const Array4<const Real>& slow_rhs_rho_u = S_slow_rhs[IntVar::xmom].const_array(mfi);
@@ -170,14 +177,15 @@ void erf_fast_rhs_MT (int step, int /*level*/,
         const Array4<Real>& theta_extrap = extrap.array(mfi);
 
         // Map factors
+        const Array4<const Real>& mf_m = mapfac_m->const_array(mfi);
         const Array4<const Real>& mf_u = mapfac_u->const_array(mfi);
         const Array4<const Real>& mf_v = mapfac_v->const_array(mfi);
 
         // Note: it is important to grow the tilebox rather than use growntilebox because
         //       we need to fill the ghost cells of the tilebox so we can use them below
-        Box gbx   = mfi.tilebox() & valid_bx;  gbx.grow(1);
-        Box gtbx  = mfi.nodaltilebox(0) & surroundingNodes(valid_bx,0); gtbx.grow(1); gtbx.setSmall(2,0);
-        Box gtby  = mfi.nodaltilebox(1) & surroundingNodes(valid_bx,1); gtby.grow(1); gtby.setSmall(2,0);
+        Box gbx   = mfi.tilebox();  gbx.grow(1);
+        Box gtbx  = mfi.nodaltilebox(0); gtbx.grow(1); gtbx.setSmall(2,0);
+        Box gtby  = mfi.nodaltilebox(1); gtby.grow(1); gtby.setSmall(2,0);
 
         {
         BL_PROFILE("fast_rhs_copies_0");
@@ -193,7 +201,7 @@ void erf_fast_rhs_MT (int step, int /*level*/,
                 // We define lagged_delta_rt for our next step as the current delta_rt
                 lagged_delta_rt(i,j,k,RhoTheta_comp) = delta_rt;
             });
-        } else if (solverChoice.use_lagged_delta_rt) {
+        } else if (use_lagged_delta_rt) {
             // This is the default for cases with no or static terrain
             amrex::ParallelFor(gbx,
             [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
@@ -298,6 +306,16 @@ void erf_fast_rhs_MT (int step, int /*level*/,
         });
         } // end profile
 
+        // *************************************************************************
+        // Define flux arrays for use in advection
+        // *************************************************************************
+        for (int dir = 0; dir < AMREX_SPACEDIM; ++dir) {
+            flux[dir].resize(amrex::surroundingNodes(bx,dir),2);
+            flux[dir].setVal<RunOn::Device>(0.);
+        }
+        const GpuArray<const Array4<Real>, AMREX_SPACEDIM>
+            flx_arr{{AMREX_D_DECL(flux[0].array(), flux[1].array(), flux[2].array())}};
+
         // *********************************************************************
         {
         BL_PROFILE("fast_T_making_rho_rhs");
@@ -326,7 +344,7 @@ void erf_fast_rhs_MT (int step, int /*level*/,
         // This must be done before we set cur_xmom and cur_ymom, since those
         //      in fact point to the same array as prev_xmom and prev_ymom
         // *********************************************************************
-        Box gbxo = mfi.nodaltilebox(2) & surroundingNodes(valid_bx,2);
+        Box gbxo = mfi.nodaltilebox(2);
         {
         BL_PROFILE("fast_MT_making_omega");
         Box gbxo_lo = gbxo; gbxo_lo.setBig(2,0);
@@ -549,10 +567,6 @@ void erf_fast_rhs_MT (int step, int /*level*/,
         // **************************************************************************
         // Define updates in the RHS of rho and (rho theta)
         // **************************************************************************
-
-        // We note that valid_bx is the actual grid, while bx may be a tile within that grid
-        // const auto& vbx_hi = amrex::ubound(valid_bx);
-
         {
         BL_PROFILE("fast_rho_final_update");
         amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
@@ -562,7 +576,8 @@ void erf_fast_rhs_MT (int step, int /*level*/,
 
               // Note that in the solve we effectively impose new_drho_w(i,j,vbx_hi.z+1)=0
               // so we don't update avg_zmom at k=vbx_hi.z+1
-              avg_zmom(i,j,k) += facinv*zflux_lo;
+              avg_zmom(i,j,k)      += facinv*zflux_lo / (mf_m(i,j,0) * mf_m(i,j,0));
+              (flx_arr[2])(i,j,k,0) = facinv*zflux_lo / (mf_m(i,j,0) * mf_m(i,j,0));
 
               // Note that the factor of (1/J) in the fast source term is canceled
               // when we multiply old and new by detJ_old and detJ_new , respectively
@@ -581,9 +596,27 @@ void erf_fast_rhs_MT (int step, int /*level*/,
               Real temp_rth = detJ_old(i,j,k) * cur_cons(i,j,k,1) +
                               dtau * ( slow_rhs_cons(i,j,k,1) + fast_rhs_rhotheta );
               cur_cons(i,j,k,1) = temp_rth / detJ_new(i,j,k);
+              (flx_arr[2])(i,j,k,1) = (flx_arr[2])(i,j,k,0) * 0.5 * (prim(i,j,k) + prim(i,j,k-1));
 
         });
         } // end profile
+
+        // We only add to the flux registers in the final RK step
+        if (l_reflux && nrk == 2) {
+            int strt_comp_reflux = 0;
+            int  num_comp_reflux = 2;
+            if (level < finest_level) {
+                fr_as_crse->CrseAdd(mfi,
+                    {{AMREX_D_DECL(&(flux[0]), &(flux[1]), &(flux[2]))}},
+                    dx, dtau, strt_comp_reflux, strt_comp_reflux, num_comp_reflux, amrex::RunOn::Device);
+            }
+            if (level > 0) {
+                fr_as_fine->FineAdd(mfi,
+                    {{AMREX_D_DECL(&(flux[0]), &(flux[1]), &(flux[2]))}},
+                    dx, dtau, strt_comp_reflux, strt_comp_reflux, num_comp_reflux, amrex::RunOn::Device);
+            }
+        } // two-way coupling
+
     } // mfi
-    }
+    } // OMP
 }

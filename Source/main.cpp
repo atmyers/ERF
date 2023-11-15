@@ -37,7 +37,9 @@ void add_par () {
    pp.add("n_proper",2);
 
    pp.add("max_grid_size",2048);
-   pp.add("blocking_factor",1);
+
+   int bf=1;
+   pp.queryAdd("blocking_factor",bf);
    pp.add("n_error_buf",0);
 }
 
@@ -45,7 +47,7 @@ void add_par () {
  * Main driver -- creates the ERF object, calls ERF.InitData() and ERF.Evolve()
  * Also includes the multiblock interface in the case where there is more than one ERF object
 */
-int main(int argc, char* argv[])
+int main (int argc, char* argv[])
 {
     // Check to see if the command line contains --describe
     if (argc >= 2) {

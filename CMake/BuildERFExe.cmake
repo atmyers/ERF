@@ -37,12 +37,14 @@ function(build_erf_lib erf_lib_name)
   endif()
 
   if(ERF_ENABLE_PARTICLES)
+    target_sources(${erf_lib_name} PRIVATE
+                   ${SRC_DIR}/Particles/TerrainFittedPC.cpp)
+    target_include_directories(${erf_lib_name} PUBLIC ${SRC_DIR}/Particles)
     target_compile_definitions(${erf_lib_name} PUBLIC ERF_USE_PARTICLES)
   endif()
 
   if(ERF_ENABLE_NETCDF)
     target_sources(${erf_lib_name} PRIVATE
-                   ${SRC_DIR}/IO/NCBuildFABs.cpp
                    ${SRC_DIR}/IO/NCInterface.cpp
                    ${SRC_DIR}/IO/NCPlotFile.cpp
                    ${SRC_DIR}/IO/NCCheckpoint.cpp
@@ -76,6 +78,7 @@ function(build_erf_lib erf_lib_name)
                    ${SRC_DIR}/Radiation/Aero_rad_props.cpp
                    ${SRC_DIR}/Radiation/Optics.cpp
                    ${SRC_DIR}/Radiation/Radiation.cpp
+                   ${SRC_DIR}/Radiation/Albedo.cpp
                    ${CMAKE_SOURCE_DIR}/Submodules/RRTMGP/cpp/examples/mo_load_coefficients.cpp
                    ${CMAKE_SOURCE_DIR}/Submodules/RRTMGP/cpp/extensions/fluxes_byband/mo_fluxes_byband_kernels.cpp
                   )
@@ -110,6 +113,7 @@ function(build_erf_lib erf_lib_name)
        ${SRC_DIR}/BoundaryConditions/BoundaryConditions_zvel.cpp
        ${SRC_DIR}/BoundaryConditions/BoundaryConditions_bndryreg.cpp
        ${SRC_DIR}/BoundaryConditions/BoundaryConditions_wrfbdy.cpp
+       ${SRC_DIR}/BoundaryConditions/BoundaryConditions_metgrid.cpp
        ${SRC_DIR}/BoundaryConditions/ERF_FillPatch.cpp
        ${SRC_DIR}/BoundaryConditions/ERF_FillPatcher.cpp
        ${SRC_DIR}/BoundaryConditions/ERF_PhysBCFunct.cpp
@@ -125,9 +129,11 @@ function(build_erf_lib erf_lib_name)
        ${SRC_DIR}/Diffusion/NumericalDiffusion.cpp
        ${SRC_DIR}/Diffusion/PBLModels.cpp
        ${SRC_DIR}/Initialization/ERF_init_custom.cpp
+       ${SRC_DIR}/Initialization/ERF_init_from_hse.cpp
        ${SRC_DIR}/Initialization/ERF_init_from_input_sounding.cpp
        ${SRC_DIR}/Initialization/ERF_init_from_wrfinput.cpp
        ${SRC_DIR}/Initialization/ERF_init_from_metgrid.cpp
+       ${SRC_DIR}/Initialization/ERF_init_uniform.cpp
        ${SRC_DIR}/Initialization/ERF_init1d.cpp
        ${SRC_DIR}/IO/Checkpoint.cpp
        ${SRC_DIR}/IO/ERF_ReadBndryPlanes.cpp
@@ -141,6 +147,7 @@ function(build_erf_lib erf_lib_name)
        ${SRC_DIR}/TimeIntegration/ERF_TimeStep.cpp
        ${SRC_DIR}/TimeIntegration/ERF_advance_dycore.cpp
        ${SRC_DIR}/TimeIntegration/ERF_advance_microphysics.cpp
+       ${SRC_DIR}/TimeIntegration/ERF_advance_radiation.cpp
        ${SRC_DIR}/TimeIntegration/ERF_make_buoyancy.cpp
        ${SRC_DIR}/TimeIntegration/ERF_make_condensation_source.cpp
        ${SRC_DIR}/TimeIntegration/ERF_make_fast_coeffs.cpp
@@ -191,6 +198,7 @@ function(build_erf_lib erf_lib_name)
   target_include_directories(${erf_lib_name} PUBLIC ${SRC_DIR})
   target_include_directories(${erf_lib_name} PUBLIC ${SRC_DIR}/Advection)
   target_include_directories(${erf_lib_name} PUBLIC ${SRC_DIR}/BoundaryConditions)
+  target_include_directories(${erf_lib_name} PUBLIC ${SRC_DIR}/DataStructs)
   target_include_directories(${erf_lib_name} PUBLIC ${SRC_DIR}/Diffusion)
   target_include_directories(${erf_lib_name} PUBLIC ${SRC_DIR}/Initialization)
   target_include_directories(${erf_lib_name} PUBLIC ${SRC_DIR}/IO)

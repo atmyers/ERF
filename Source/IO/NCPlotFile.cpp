@@ -19,10 +19,10 @@
 using namespace amrex;
 
 void
-ERF::writeNCPlotFile(int lev, int which_subdomain, const std::string& dir,
-                     const Vector<const MultiFab*> &plotMF,
-                     const Vector<std::string> &plot_var_names,
-                     const Vector<int>& level_steps, const Real time) const
+ERF::writeNCPlotFile (int lev, int which_subdomain, const std::string& dir,
+                      const Vector<const MultiFab*> &plotMF,
+                      const Vector<std::string> &plot_var_names,
+                      const Vector<int>& level_steps, const Real time) const
 {
      // get the processor number
      int iproc = amrex::ParallelContext::MyProcAll();
@@ -53,7 +53,9 @@ ERF::writeNCPlotFile(int lev, int which_subdomain, const std::string& dir,
      int nblocks = grids[lev].size();
      auto dm = plotMF[lev]->DistributionMap();
      offset.reserve(nproc);
-     offset[0] = 0;
+     for(auto n = 0; n < nproc; n++) {
+         offset[n] = 0;
+     }
      for(auto ib=0; ib<nblocks; ib++) {
         auto npts_per_block = grids[lev][ib].length(0)*grids[lev][ib].length(1)*grids[lev][ib].length(2);
         offset[dm[ib]] = offset[dm[ib]] + npts_per_block;
@@ -130,6 +132,7 @@ ERF::writeNCPlotFile(int lev, int which_subdomain, const std::string& dir,
       ncf.put_attr("number_variables", std::vector<int>{n_data_items});
       ncf.put_attr("space_dimension", std::vector<int>{AMREX_SPACEDIM});
       ncf.put_attr("current_time", std::vector<double>{time});
+      ncf.put_attr("start_time", std::vector<double>{start_bdy_time});
       ncf.put_attr("CurrentLevel", std::vector<int>{flev});
 
       Real dx[AMREX_SPACEDIM];
@@ -225,6 +228,7 @@ ERF::writeNCPlotFile(int lev, int which_subdomain, const std::string& dir,
    size_t nfai = 0;
    long unsigned numpts = 0;
    const int ncomp = plotMF[lev]->nComp();
+
    for (amrex::MFIter fai(*plotMF[lev]); fai.isValid(); ++fai) {
        auto box = fai.validbox();
        if (subdomain.contains(box)) {

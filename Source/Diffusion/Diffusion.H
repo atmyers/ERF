@@ -4,7 +4,6 @@
 #include <AMReX.H>
 #include <AMReX_MultiFab.H>
 #include <AMReX_BCRec.H>
-#include <AMReX_InterpFaceRegister.H>
 #include <DataStruct.H>
 #include <IndexDefines.H>
 #include <ABLMost.H>
@@ -20,7 +19,7 @@ void DiffusionSrcForMom_N (const amrex::Box& bxx, const amrex::Box& bxy, const a
                            const amrex::Array4<const amrex::Real>& tau13    ,
                            const amrex::Array4<const amrex::Real>& tau23    ,
                            const amrex::Array4<const amrex::Real>& cons,
-                           const SolverChoice& solverChoice,
+                           const DiffChoice& diffChoice,
                            const amrex::GpuArray<amrex::Real, AMREX_SPACEDIM>& dxInv,
                            const amrex::Array4<const amrex::Real>& mf_m      ,
                            const amrex::Array4<const amrex::Real>& mf_u      ,
@@ -36,7 +35,7 @@ void DiffusionSrcForMom_T (const amrex::Box& bxx, const amrex::Box& bxy, const a
                            const amrex::Array4<const amrex::Real>& tau21    , const amrex::Array4<const amrex::Real>& tau23,
                            const amrex::Array4<const amrex::Real>& tau31    , const amrex::Array4<const amrex::Real>& tau32,
                            const amrex::Array4<const amrex::Real>& cons, const amrex::Array4<const amrex::Real>& detJ,
-                           const SolverChoice& solverChoice                 ,
+                           const DiffChoice& diffChoice,
                            const amrex::GpuArray<amrex::Real, AMREX_SPACEDIM>& dxInv,
                            const amrex::Array4<const amrex::Real>& mf_m      ,
                            const amrex::Array4<const amrex::Real>& mf_u      ,
@@ -62,7 +61,8 @@ void DiffusionSrcForState_N (const amrex::Box& bx, const amrex::Box& domain,
                                    amrex::Array4<      amrex::Real>& hfx_z,
                                    amrex::Array4<      amrex::Real>& diss,
                              const amrex::Array4<const amrex::Real>& mu_turb,
-                             const SolverChoice &solverChoice,
+                             const DiffChoice& diffChoice,
+                             const TurbChoice& turbChoice,
                              const amrex::Array4<const amrex::Real>& tm_arr,
                              const amrex::GpuArray<amrex::Real,AMREX_SPACEDIM> grav_gpu,
                              const amrex::BCRec* bc_ptr);
@@ -87,7 +87,8 @@ void DiffusionSrcForState_T (const amrex::Box& bx, const amrex::Box& domain,
                                    amrex::Array4<      amrex::Real>& hfx_z,
                                    amrex::Array4<      amrex::Real>& diss,
                              const amrex::Array4<const amrex::Real>& mu_turb,
-                             const SolverChoice &solverChoice,
+                             const DiffChoice& diffChoice,
+                             const TurbChoice& turbChoice,
                              const amrex::Array4<const amrex::Real>& tm_arr,
                              const amrex::GpuArray<amrex::Real,AMREX_SPACEDIM> grav_gpu,
                              const amrex::BCRec* bc_ptr);

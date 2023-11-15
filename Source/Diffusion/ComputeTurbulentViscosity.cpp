@@ -11,10 +11,12 @@ void
 ComputeTurbulentViscosityPBL (const amrex::MultiFab& xvel,
                               const amrex::MultiFab& yvel,
                               const amrex::MultiFab& cons_in,
+                              const amrex::MultiFab& cons_old,
                               amrex::MultiFab& eddyViscosity,
                               const amrex::Geometry& geom,
-                              const SolverChoice& solverChoice,
+                              const TurbChoice& turbChoice,
                               std::unique_ptr<ABLMost>& most,
+                              const amrex::BCRec* bc_ptr,
                               bool /*vert_only*/);
 
 /**
@@ -35,7 +37,7 @@ ComputeTurbulentViscosityPBL (const amrex::MultiFab& xvel,
  * @param[in]  geom problem geometry
  * @param[in]  mapfac_u map factor at x-face
  * @param[in]  mapfac_v map factor at y-face
- * @param[in]  solverChoice container with solver parameters
+ * @param[in]  turbChoice container with turbulence parameters
  */
 void ComputeTurbulentViscosityLES (const amrex::MultiFab& Tau11, const amrex::MultiFab& Tau22, const amrex::MultiFab& Tau33,
                                    const amrex::MultiFab& Tau12, const amrex::MultiFab& Tau13, const amrex::MultiFab& Tau23,
@@ -43,59 +45,61 @@ void ComputeTurbulentViscosityLES (const amrex::MultiFab& Tau11, const amrex::Mu
                                    amrex::MultiFab& Hfx1, amrex::MultiFab& Hfx2, amrex::MultiFab& Hfx3, amrex::MultiFab& Diss,
                                    const amrex::Geometry& geom,
                                    const amrex::MultiFab& mapfac_u, const amrex::MultiFab& mapfac_v,
-                                   const SolverChoice& solverChoice)
+                                   const TurbChoice& turbChoice, const Real const_grav)
 {
     const amrex::GpuArray<amrex::Real, AMREX_SPACEDIM> dxInv = geom.InvCellSizeArray();
     const Box& domain = geom.Domain();
 
     // SMAGORINSKY: Fill Kturb for momentum in horizontal and vertical
     //***********************************************************************************
-    if (solverChoice.les_type == LESType::Smagorinsky)
+    if (turbChoice.les_type == LESType::Smagorinsky)
     {
-      Real Cs = solverChoice.Cs;
+      Real Cs = turbChoice.Cs;
 
 #ifdef _OPENMP
 #pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
 #endif
       for (amrex::MFIter mfi(eddyViscosity,amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
       {
-          Box bxcc  = mfi.tilebox();
+          // NOTE: This gets us the lateral ghost cells for lev>0; which
+          //       have been filled from FP Two Levels.
+          Box bxcc  = mfi.growntilebox() & domain;
 
-        const Array4<Real>& mu_turb = eddyViscosity.array(mfi);
-        const amrex::Array4<amrex::Real const > &cell_data = cons_in.array(mfi);
+          const Array4<Real>& mu_turb = eddyViscosity.array(mfi);
+          const amrex::Array4<amrex::Real const > &cell_data = cons_in.array(mfi);
 
-        Array4<Real const> tau11 = Tau11.array(mfi);
-        Array4<Real const> tau22 = Tau22.array(mfi);
-        Array4<Real const> tau33 = Tau33.array(mfi);
-        Array4<Real const> tau12 = Tau12.array(mfi);
-        Array4<Real const> tau13 = Tau13.array(mfi);
-        Array4<Real const> tau23 = Tau23.array(mfi);
+          Array4<Real const> tau11 = Tau11.array(mfi);
+          Array4<Real const> tau22 = Tau22.array(mfi);
+          Array4<Real const> tau33 = Tau33.array(mfi);
+          Array4<Real const> tau12 = Tau12.array(mfi);
+          Array4<Real const> tau13 = Tau13.array(mfi);
+          Array4<Real const> tau23 = Tau23.array(mfi);
 
-        Array4<Real const> mf_u = mapfac_u.array(mfi);
-        Array4<Real const> mf_v = mapfac_v.array(mfi);
+          Array4<Real const> mf_u = mapfac_u.array(mfi);
+          Array4<Real const> mf_v = mapfac_v.array(mfi);
 
-        ParallelFor(bxcc, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
-        {
-            Real SmnSmn = ComputeSmnSmn(i,j,k,tau11,tau22,tau33,tau12,tau13,tau23);
-            Real cellVolMsf = 1.0 / (dxInv[0] * mf_u(i,j,0) * dxInv[1] * mf_v(i,j,0) * dxInv[2]);
-            Real DeltaMsf   = std::pow(cellVolMsf,1.0/3.0);
-            Real CsDeltaSqrMsf = Cs*Cs*DeltaMsf*DeltaMsf;
+          ParallelFor(bxcc, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+          {
+              Real SmnSmn = ComputeSmnSmn(i,j,k,tau11,tau22,tau33,tau12,tau13,tau23);
+              Real cellVolMsf = 1.0 / (dxInv[0] * mf_u(i,j,0) * dxInv[1] * mf_v(i,j,0) * dxInv[2]);
+              Real DeltaMsf   = std::pow(cellVolMsf,1.0/3.0);
+              Real CsDeltaSqrMsf = Cs*Cs*DeltaMsf*DeltaMsf;
 
-          mu_turb(i, j, k, EddyDiff::Mom_h) = CsDeltaSqrMsf * cell_data(i, j, k, Rho_comp) * std::sqrt(2.0*SmnSmn);
-          mu_turb(i, j, k, EddyDiff::Mom_v) = mu_turb(i, j, k, EddyDiff::Mom_h);
-        });
+              mu_turb(i, j, k, EddyDiff::Mom_h) = CsDeltaSqrMsf * cell_data(i, j, k, Rho_comp) * std::sqrt(2.0*SmnSmn);
+              mu_turb(i, j, k, EddyDiff::Mom_v) = mu_turb(i, j, k, EddyDiff::Mom_h);
+          });
       }
     }
     // DEARDORFF: Fill Kturb for momentum in horizontal and vertical
     //***********************************************************************************
-    else if (solverChoice.les_type == LESType::Deardorff)
+    else if (turbChoice.les_type == LESType::Deardorff)
     {
-      const amrex::Real l_C_k        = solverChoice.Ck;
-      const amrex::Real l_C_e        = solverChoice.Ce;
-      const amrex::Real l_C_e_wall   = solverChoice.Ce_wall;
+      const amrex::Real l_C_k        = turbChoice.Ck;
+      const amrex::Real l_C_e        = turbChoice.Ce;
+      const amrex::Real l_C_e_wall   = turbChoice.Ce_wall;
       const amrex::Real Ce_lcoeff    = amrex::max(0.0, l_C_e - 1.9*l_C_k);
-      const amrex::Real l_abs_g      = solverChoice.gravity;
-      const amrex::Real l_inv_theta0 = 1.0 / solverChoice.theta_ref;
+      const amrex::Real l_abs_g      = const_grav;
+      const amrex::Real l_inv_theta0 = 1.0 / turbChoice.theta_ref;
 
 #ifdef _OPENMP
 #pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
@@ -160,12 +164,12 @@ void ComputeTurbulentViscosityLES (const amrex::MultiFab& Tau11, const amrex::Mu
       }
     }
 
-    // Extrapolate Kturb in extrap x/y, fill remaining elements
+    // Extrapolate Kturb in x/y, fill remaining elements (relevent to lev==0)
     //***********************************************************************************
     int ngc(1);
-    Real inv_Pr_t    = solverChoice.Pr_t_inv;
-    Real inv_Sc_t    = solverChoice.Sc_t_inv;
-    Real inv_sigma_k = 1.0 / solverChoice.sigma_k;
+    Real inv_Pr_t    = turbChoice.Pr_t_inv;
+    Real inv_Sc_t    = turbChoice.Sc_t_inv;
+    Real inv_sigma_k = 1.0 / turbChoice.sigma_k;
 #if defined(ERF_USE_MOISTURE)
     // EddyDiff mapping :   Theta_h   Scalar_h  KE_h         QKE_h        Qt_h      Qp_h
     Vector<Real> Factors = {inv_Pr_t, inv_Sc_t, inv_sigma_k, inv_sigma_k, inv_Sc_t, inv_Sc_t}; // alpha = mu/Pr
@@ -180,8 +184,8 @@ void ComputeTurbulentViscosityLES (const amrex::MultiFab& Tau11, const amrex::Mu
     Gpu::copy(Gpu::hostToDevice, Factors.begin(), Factors.end(), d_Factors.begin());
     Real* fac_ptr = d_Factors.data();
 
-    bool use_KE  = (solverChoice.les_type == LESType::Deardorff);
-    bool use_QKE = (solverChoice.use_QKE && solverChoice.diffuse_QKE_3D);
+    bool use_KE  = (turbChoice.les_type == LESType::Deardorff);
+    bool use_QKE = (turbChoice.use_QKE && turbChoice.diffuse_QKE_3D);
 
 #ifdef _OPENMP
 #pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
@@ -189,8 +193,8 @@ void ComputeTurbulentViscosityLES (const amrex::MultiFab& Tau11, const amrex::Mu
     for ( amrex::MFIter mfi(eddyViscosity,amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi)
     {
         Box bxcc   = mfi.tilebox();
-        Box planex = bxcc; planex.setSmall(0, 1); planex.setBig(0, ngc);
-        Box planey = bxcc; planey.setSmall(1, 1); planey.setBig(1, ngc);
+        Box planex = bxcc; planex.setSmall(0, 1); planex.setBig(0, ngc); planex.grow(1,1);
+        Box planey = bxcc; planey.setSmall(1, 1); planey.setBig(1, ngc); planey.grow(0,1);
         int i_lo   = bxcc.smallEnd(0); int i_hi = bxcc.bigEnd(0);
         int j_lo   = bxcc.smallEnd(1); int j_hi = bxcc.bigEnd(1);
         bxcc.growLo(0,ngc); bxcc.growHi(0,ngc);
@@ -198,33 +202,37 @@ void ComputeTurbulentViscosityLES (const amrex::MultiFab& Tau11, const amrex::Mu
 
         const Array4<Real>& mu_turb = eddyViscosity.array(mfi);
 
-        // Extrapolate outside the domain in lateral directions
+        // Extrapolate outside the domain in lateral directions (planex owns corner cells)
         if (i_lo == domain.smallEnd(0)) {
             amrex::ParallelFor(planex, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
             {
-                mu_turb(i_lo-i, j, k, EddyDiff::Mom_h) = mu_turb(i_lo, j, k, EddyDiff::Mom_h);
-                mu_turb(i_lo-i, j, k, EddyDiff::Mom_v) = mu_turb(i_lo, j, k, EddyDiff::Mom_v);
+                int lj = amrex::min(amrex::max(j, domain.smallEnd(1)), domain.bigEnd(1));
+                mu_turb(i_lo-i, j, k, EddyDiff::Mom_h) = mu_turb(i_lo, lj, k, EddyDiff::Mom_h);
+                mu_turb(i_lo-i, j, k, EddyDiff::Mom_v) = mu_turb(i_lo, lj, k, EddyDiff::Mom_v);
             });
         }
         if (i_hi == domain.bigEnd(0)) {
             amrex::ParallelFor(planex, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
             {
-                mu_turb(i_hi+i, j, k, EddyDiff::Mom_h) = mu_turb(i_hi, j, k, EddyDiff::Mom_h);
-                mu_turb(i_hi+i, j, k, EddyDiff::Mom_v) = mu_turb(i_hi, j, k, EddyDiff::Mom_v);
+                int lj = amrex::min(amrex::max(j, domain.smallEnd(1)), domain.bigEnd(1));
+                mu_turb(i_hi+i, j, k, EddyDiff::Mom_h) = mu_turb(i_hi, lj, k, EddyDiff::Mom_h);
+                mu_turb(i_hi+i, j, k, EddyDiff::Mom_v) = mu_turb(i_hi, lj, k, EddyDiff::Mom_v);
             });
         }
         if (j_lo == domain.smallEnd(1)) {
             amrex::ParallelFor(planey, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
             {
-                mu_turb(i, j_lo-j, k, EddyDiff::Mom_h) = mu_turb(i, j_lo, k, EddyDiff::Mom_h);
-                mu_turb(i, j_lo-j, k, EddyDiff::Mom_v) = mu_turb(i, j_lo, k, EddyDiff::Mom_v);
+                int li = amrex::min(amrex::max(i, domain.smallEnd(0)), domain.bigEnd(0));
+                mu_turb(i, j_lo-j, k, EddyDiff::Mom_h) = mu_turb(li, j_lo, k, EddyDiff::Mom_h);
+                mu_turb(i, j_lo-j, k, EddyDiff::Mom_v) = mu_turb(li, j_lo, k, EddyDiff::Mom_v);
             });
         }
         if (j_hi == domain.bigEnd(1)) {
             amrex::ParallelFor(planey, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
             {
-                mu_turb(i, j_hi+j, k, EddyDiff::Mom_h) = mu_turb(i, j_hi, k, EddyDiff::Mom_h);
-                mu_turb(i, j_hi+j, k, EddyDiff::Mom_v) = mu_turb(i, j_hi, k, EddyDiff::Mom_v);
+                int li = amrex::min(amrex::max(i, domain.smallEnd(0)), domain.bigEnd(0));
+                mu_turb(i, j_hi+j, k, EddyDiff::Mom_h) = mu_turb(li, j_hi, k, EddyDiff::Mom_h);
+                mu_turb(i, j_hi+j, k, EddyDiff::Mom_v) = mu_turb(li, j_hi, k, EddyDiff::Mom_v);
             });
         }
 
@@ -332,9 +340,9 @@ void ComputeTurbulentViscosityLES (const amrex::MultiFab& Tau11, const amrex::Mu
                    mu_turb(i, j, k_hi+k, indx_v) = mu_turb(i, j, k_hi, indx_v);
                  });
                  break;
-           }
-       }
-   }
+            }
+        }
+    }
 }
 
 /**
@@ -357,7 +365,7 @@ void ComputeTurbulentViscosityLES (const amrex::MultiFab& Tau11, const amrex::Mu
  * @param[in]  geom problem geometry
  * @param[in]  mapfac_u map factor at x-face
  * @param[in]  mapfac_v map factor at y-face
- * @param[in]  solverChoice container with solver parameters
+ * @param[in]  turbChoice container with turbulence parameters
  * @param[in]  most pointer to Monin-Obukhov class if instantiated
  * @param[in]  vert_only flag for vertical components of eddyViscosity
  */
@@ -365,12 +373,14 @@ void ComputeTurbulentViscosity (const amrex::MultiFab& xvel , const amrex::Multi
                                 const amrex::MultiFab& Tau11, const amrex::MultiFab& Tau22, const amrex::MultiFab& Tau33,
                                 const amrex::MultiFab& Tau12, const amrex::MultiFab& Tau13, const amrex::MultiFab& Tau23,
                                 const amrex::MultiFab& cons_in,
+                                const amrex::MultiFab& cons_old,
                                 amrex::MultiFab& eddyViscosity,
                                 amrex::MultiFab& Hfx1, amrex::MultiFab& Hfx2, amrex::MultiFab& Hfx3, amrex::MultiFab& Diss,
                                 const amrex::Geometry& geom,
                                 const amrex::MultiFab& mapfac_u, const amrex::MultiFab& mapfac_v,
-                                const SolverChoice& solverChoice,
+                                const TurbChoice& turbChoice, const Real const_grav,
                                 std::unique_ptr<ABLMost>& most,
+                                const amrex::BCRec* bc_ptr,
                                 bool vert_only)
 {
     BL_PROFILE_VAR("ComputeTurbulentViscosity()",ComputeTurbulentViscosity);
@@ -384,31 +394,29 @@ void ComputeTurbulentViscosity (const amrex::MultiFab& xvel , const amrex::Multi
     // ComputeTurbulentViscosityPBL computes the PBL viscosity just for the vertical component.
     //
 
-    // We must initialize all the components to 0 because we may not set all of them below
-    //    (which ones depends on which LES / PBL scheme we are using)
-    eddyViscosity.setVal(0.0);
-
     if (most) {
-        bool l_use_turb = ( solverChoice.les_type == LESType::Smagorinsky ||
-                            solverChoice.les_type == LESType::Deardorff   ||
-                            solverChoice.pbl_type == PBLType::MYNN25 );
+        bool l_use_turb = ( turbChoice.les_type == LESType::Smagorinsky ||
+                            turbChoice.les_type == LESType::Deardorff   ||
+                            turbChoice.pbl_type == PBLType::MYNN25      ||
+                            turbChoice.pbl_type == PBLType::YSU );
         AMREX_ALWAYS_ASSERT_WITH_MESSAGE(l_use_turb,
           "An LES or PBL model must be utilized with MOST boundaries to compute the turbulent viscosity");
     } else {
         AMREX_ALWAYS_ASSERT(!vert_only);
     }
 
-    if (solverChoice.les_type != LESType::None) {
+    if (turbChoice.les_type != LESType::None) {
         ComputeTurbulentViscosityLES(Tau11, Tau22, Tau33,
                                      Tau12, Tau13, Tau23,
                                      cons_in, eddyViscosity,
                                      Hfx1, Hfx2, Hfx3, Diss,
                                      geom, mapfac_u, mapfac_v,
-                                     solverChoice);
+                                     turbChoice, const_grav);
     }
 
-    if (solverChoice.pbl_type != PBLType::None) {
-        ComputeTurbulentViscosityPBL(xvel, yvel, cons_in, eddyViscosity,
-                                     geom, solverChoice, most, vert_only);
+    if (turbChoice.pbl_type != PBLType::None) {
+        // NOTE: state_new is passed in for Cons_old (due to ptr swap in advance)
+        ComputeTurbulentViscosityPBL(xvel, yvel, cons_in, cons_old, eddyViscosity,
+                                     geom, turbChoice, most, bc_ptr, vert_only);
     }
 }

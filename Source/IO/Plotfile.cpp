@@ -8,7 +8,7 @@
 using namespace amrex;
 
 template<typename V, typename T>
-bool containerHasElement(const V& iterable, const T& query) {
+bool containerHasElement (const V& iterable, const T& query) {
     return std::find(iterable.begin(), iterable.end(), query) != iterable.end();
 }
 
@@ -78,7 +78,7 @@ ERF::setPlotVariables (const std::string& pp_plot_var_names, Vector<std::string>
 
 // set plotfile variable names
 Vector<std::string>
-ERF::PlotFileVarNames ( Vector<std::string> plot_var_names )
+ERF::PlotFileVarNames (Vector<std::string> plot_var_names )
 {
     Vector<std::string> names;
 
@@ -544,6 +544,23 @@ ERF::WritePlotFile (int which, Vector<std::string> plot_var_names)
             mf_comp ++;
         }
 
+        if (containerHasElement(plot_var_names, "Kmv")) {
+            MultiFab::Copy(mf[lev],*eddyDiffs_lev[lev],EddyDiff::Mom_v,mf_comp,1,0);
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "Kmh")) {
+            MultiFab::Copy(mf[lev],*eddyDiffs_lev[lev],EddyDiff::Mom_h,mf_comp,1,0);
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "Khv")) {
+            MultiFab::Copy(mf[lev],*eddyDiffs_lev[lev],EddyDiff::Theta_v,mf_comp,1,0);
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "Khh")) {
+            MultiFab::Copy(mf[lev],*eddyDiffs_lev[lev],EddyDiff::Theta_h,mf_comp,1,0);
+            mf_comp ++;
+        }
+
 #if defined(ERF_USE_MOISTURE)
         calculate_derived("qt",          derived::erf_derQt);
         calculate_derived("qp",          derived::erf_derQp);
@@ -593,6 +610,17 @@ ERF::WritePlotFile (int which, Vector<std::string> plot_var_names)
 #elif defined(ERF_USE_WARM_NO_PRECIP)
         calculate_derived("qv",          derived::erf_derQv);
         calculate_derived("qc",          derived::erf_derQc);
+#endif
+
+#ifdef ERF_USE_PARTICLES
+        if (containerHasElement(plot_var_names, "particle_count"))
+        {
+            MultiFab temp_dat(mf[lev].boxArray(), mf[lev].DistributionMap(), 1, 0);
+            temp_dat.setVal(0);
+            tracer_particles->Increment(temp_dat, lev);
+            MultiFab::Copy(mf[lev], temp_dat, 0, mf_comp, 1, 0);
+            mf_comp += 1;
+        }
 #endif
 
 #ifdef ERF_COMPUTE_ERROR

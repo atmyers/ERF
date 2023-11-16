@@ -29,7 +29,7 @@ struct ParticleData {
         pp.query("use_hydro_particles", use_hydro_particles);
     }
 
-    void init_particles(std::unique_ptr<amrex::ParGDBBase> a_gdb, amrex::Vector<std::unique_ptr<amrex::MultiFab>> z_phys_nd)
+    void init_particles(amrex::ParGDBBase* a_gdb, const amrex::Vector<std::unique_ptr<amrex::MultiFab>>& z_phys_nd)
     {
         // Initialize tracer particles
         if (use_tracer_particles) {

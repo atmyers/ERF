@@ -53,8 +53,8 @@ public:
         {}
 
     HydroPC (const amrex::Geometry            & geom,
-              const amrex::DistributionMapping & dmap,
-              const amrex::BoxArray            & ba)
+             const amrex::DistributionMapping & dmap,
+             const amrex::BoxArray            & ba)
         : amrex::ParticleContainer<HydroRealIdx::ncomps, HydroIntIdx::ncomps, 0, 0,
                                    amrex::DefaultAllocator, HydroAssignor>(geom, dmap, ba)
         {}

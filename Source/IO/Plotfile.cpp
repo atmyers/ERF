@@ -59,7 +59,13 @@ ERF::setPlotVariables (const std::string& pp_plot_var_names, Vector<std::string>
     }
     for (int i = 0; i < derived_names.size(); ++i) {
         if ( containerHasElement(plot_var_names, derived_names[i]) ) {
+#ifdef ERF_USE_PARTICLES
+            if ( (solverChoice.use_terrain || (derived_names[i] != "z_phys" && derived_names[i] != "detJ") ) &&
+                 (particleData.use_tracer_particles || (derived_names[i] != "tracer_particle_count")       ) &&
+                 (particleData.use_hydro_particles  || (derived_names[i] != "hydro_particle_count")        ) ) {
+#else
             if (solverChoice.use_terrain || (derived_names[i] != "z_phys" && derived_names[i] != "detJ") ) {
+#endif
                tmp_plot_names.push_back(derived_names[i]);
             }
         }
@@ -98,11 +104,14 @@ ERF::WritePlotFile (int which, Vector<std::string> plot_var_names)
     if (ncomp_mf == 0)
         return;
 
-    // We fillpatch here because some of the derived quantities require derivatives
-    //     which require ghost cells to be filled
+    // We Fillpatch here because some of the derived quantities require derivatives
+    //     which require ghost cells to be filled.  We do not need to call FillPatcher
+    //     because we don't need to set interior fine points.
     for (int lev = 0; lev <= finest_level; ++lev) {
+        bool fillset = false;
         FillPatch(lev, t_new[lev], {&vars_new[lev][Vars::cons], &vars_new[lev][Vars::xvel],
-                                    &vars_new[lev][Vars::yvel], &vars_new[lev][Vars::zvel]});
+                                    &vars_new[lev][Vars::yvel], &vars_new[lev][Vars::zvel]},
+                                    fillset);
     }
 
     Vector<MultiFab> mf(finest_level+1);
@@ -613,11 +622,19 @@ ERF::WritePlotFile (int which, Vector<std::string> plot_var_names)
 #endif
 
 #ifdef ERF_USE_PARTICLES
-        if (containerHasElement(plot_var_names, "particle_count"))
+        if (containerHasElement(plot_var_names, "tracer_particle_count"))
         {
             MultiFab temp_dat(mf[lev].boxArray(), mf[lev].DistributionMap(), 1, 0);
             temp_dat.setVal(0);
-            tracer_particles->Increment(temp_dat, lev);
+            particleData.tracer_particles->Increment(temp_dat, lev);
+            MultiFab::Copy(mf[lev], temp_dat, 0, mf_comp, 1, 0);
+            mf_comp += 1;
+        }
+        if (containerHasElement(plot_var_names, "hydro_particle_count"))
+        {
+            MultiFab temp_dat(mf[lev].boxArray(), mf[lev].DistributionMap(), 1, 0);
+            temp_dat.setVal(0);
+            particleData.hydro_particles->Increment(temp_dat, lev);
             MultiFab::Copy(mf[lev], temp_dat, 0, mf_comp, 1, 0);
             mf_comp += 1;
         }
@@ -827,9 +844,7 @@ ERF::WritePlotFile (int which, Vector<std::string> plot_var_names)
             writeJobInfo(plotfilename);
 
 #ifdef ERF_USE_PARTICLES
-            if (use_tracer_particles) {
-                tracer_particles->Checkpoint(plotfilename, "tracers", true, tracer_particle_varnames);
-            }
+            particleData.Checkpoint(plotfilename);
 #endif
 #ifdef ERF_USE_HDF5
         } else if (plotfile_type == "hdf5" || plotfile_type == "HDF5") {
@@ -917,9 +932,7 @@ ERF::WritePlotFile (int which, Vector<std::string> plot_var_names)
             writeJobInfo(plotfilename);
 
 #ifdef ERF_USE_PARTICLES
-            if (use_tracer_particles) {
-                tracer_particles->Checkpoint(plotfilename, "tracers", true, tracer_particle_varnames);
-            }
+            particleData.Checkpoint(plotfilename);
 #endif
 #ifdef ERF_USE_NETCDF
         } else if (plotfile_type == "netcdf" || plotfile_type == "NetCDF") {

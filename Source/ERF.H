@@ -27,7 +27,7 @@
 #endif
 
 #ifdef ERF_USE_PARTICLES
-#include "TerrainFittedPC.H"
+#include "ParticleData.H"
 #endif
 
 #include "prob_common.H"
@@ -64,10 +64,6 @@
 
 #ifdef ERF_USE_MULTIBLOCK
 class MultiBlockContainer;
-#endif
-
-#ifdef ERF_USE_PARTICLES
-typedef amrex::ParticleContainer<AMREX_SPACEDIM, 0, 0, 0> TracerPC;
 #endif
 
 /**
@@ -320,11 +316,6 @@ public:
                            int ncomp_cons = NVAR);
 #endif
 
-#ifdef ERF_USE_PARTICLES
-    std::unique_ptr<TerrainFittedPC> tracer_particles;
-    static amrex::Vector<std::string> tracer_particle_varnames;
-#endif
-
 #ifdef ERF_USE_NETCDF
     void init_from_wrfinput (int lev);
     void init_from_metgrid (int lev);
@@ -345,7 +336,7 @@ private:
     // set covered coarse cells to be the average of overlying fine cells
     void AverageDown (int scomp, int ncomp);
 
-    void update_arrays (int lev, const amrex::BoxArray& ba, const amrex::DistributionMapping& dm);
+    void update_diffusive_arrays (int lev, const amrex::BoxArray& ba, const amrex::DistributionMapping& dm);
 
     void update_terrain_arrays (int lev, amrex::Real time);
 
@@ -362,6 +353,8 @@ private:
     void init_custom (int lev);
 
     void init_uniform (int lev);
+
+    void init_stuff (int lev, const amrex::BoxArray& ba, const amrex::DistributionMapping& dm);
 
     void initialize_integrator (int lev, amrex::MultiFab& cons_mf, amrex::MultiFab& vel_mf);
 
@@ -543,6 +536,7 @@ private:
     amrex::Vector<amrex::MultiFab> rW_new;
 
 #if defined(ERF_USE_MOISTURE)
+    std::string moisture_model = "NullMoist";
     Microphysics micro;
     amrex::Vector<amrex::MultiFab> qmoist; // This has 6 components: qv, qc, qi, qr, qs, qg
 #endif
@@ -691,17 +685,19 @@ private:
                                                     ,"xvel_err", "yvel_err", "zvel_err", "pp_err"
 #endif
 #ifdef ERF_USE_PARTICLES
-                                                    ,"particle_count"
+                                                    ,"tracer_particle_count", "hydro_particle_count"
 #endif
                                                    };
 
     // algorithm choices
     static SolverChoice solverChoice;
 
-    static int verbose;
+#ifdef ERF_USE_PARTICLES
+    // Particle info
+    static ParticleData particleData;
+#endif
 
-    // flag to turn tracer particle generation on/off
-    static bool use_tracer_particles;
+    static int verbose;
 
     // Diagnostic output interval
     static int sum_interval;
